@@ -1,3 +1,5 @@
+#app/firebase_init.py
+
 import firebase_admin
 from firebase_admin import credentials
 import pyrebase

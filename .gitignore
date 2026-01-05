@@ -1,6 +1,6 @@
 .idea/
 .venv/
 __pycache__/
-serviceAccountKey.json
 .env
 .DS_Store
+secrets/

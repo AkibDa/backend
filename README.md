@@ -1,4 +1,5 @@
 # GreenPlate Backend
+[![Codacy Badge](https://app.codacy.com/project/badge/Grade/f223f0b4fffb4c6dab6880de5cba9e1a)](https://app.codacy.com/gh/GreenPlateByCodeNewbies/backend/dashboard?utm_source=gh&utm_medium=referral&utm_content=&utm_campaign=Badge_grade)
 
 Lightweight FastAPI backend for managing college food stalls, menus, and staff. Uses Firebase Authentication + Firestore and supports AI-based menu extraction.
 

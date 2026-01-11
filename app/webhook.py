@@ -1,8 +1,8 @@
 # app/webhook.py
+
 import os
 import hmac
 import hashlib
-import json
 from fastapi import APIRouter, Request, HTTPException
 from firebase_admin import firestore
 from .firebase_init import db

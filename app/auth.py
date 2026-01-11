@@ -1,6 +1,5 @@
 # app/auth.py
 
-import os
 from fastapi.responses import JSONResponse
 from starlette import status
 from firebase_admin import auth, firestore

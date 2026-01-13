@@ -5,7 +5,7 @@ import razorpay
 from fastapi.responses import JSONResponse
 from starlette import status
 from firebase_admin import auth
-from .firebase_init import db
+from .firebase_init import db, firestore
 from datetime import datetime
 from .schema import CreateOrderSchema
 
@@ -117,6 +117,7 @@ async def create_payment_order(order_data: CreateOrderSchema, id_token: str):
     stall_id = order_data.stall_id
 
     total_amount = 0
+    order_items = []
 
     menu_ref = (
       db.collection("colleges")
@@ -139,7 +140,16 @@ async def create_payment_order(order_data: CreateOrderSchema, id_token: str):
           )
 
         price = item_data.get('price', 0)
-        total_amount += price * cart_item.quantity
+        quantity = cart_item.quantity
+        total_amount += price * quantity
+
+        order_items.append({
+          "item_id": cart_item.item_id,
+          "name": item_data.get('name'),
+          "price": price,
+          "quantity": quantity
+        })
+
       else:
         return JSONResponse(
           status_code=status.HTTP_400_BAD_REQUEST,
@@ -149,21 +159,40 @@ async def create_payment_order(order_data: CreateOrderSchema, id_token: str):
     if total_amount <= 0:
       return JSONResponse(
         status_code=status.HTTP_400_BAD_REQUEST,
-        content={"message": "Invalid order total (0). Check item availability."}
+        content={"message": "Invalid order total."}
       )
+
+    new_order_ref = db.collection('orders').document()
+    internal_order_id = new_order_ref.id
+
+    firestore_order_data = {
+      "user_id": user_uid,
+      "stall_id": stall_id,
+      "college_id": college_id,
+      "items": order_items,
+      "amount": total_amount,
+      "status": "PENDING",
+      "created_at": firestore.SERVER_TIMESTAMP,
+      "updated_at": firestore.SERVER_TIMESTAMP
+    }
+
+    new_order_ref.set(firestore_order_data)
 
     data = {
       "amount": int(total_amount * 100),
       "currency": "INR",
-      "receipt": f"order_{user_uid[:5]}_{int(datetime.now().timestamp())}",
+      "receipt": f"rcpt_{internal_order_id[:8]}",
       "notes": {
         "stall_id": stall_id,
         "user_uid": user_uid,
-        "college_id": college_id
+        "college_id": college_id,
+        "internal_order_id": internal_order_id
       }
     }
 
     order = razorpay_client.order.create(data=data)
+
+    new_order_ref.update({"razorpay_order_id": order['id']})
 
     return JSONResponse(
       status_code=status.HTTP_200_OK,
@@ -172,6 +201,7 @@ async def create_payment_order(order_data: CreateOrderSchema, id_token: str):
         "amount": order['amount'],
         "currency": order['currency'],
         "key_id": os.environ.get("RAZORPAY_KEY_ID"),
+        "internal_order_id": internal_order_id,
         "message": "Order created successfully"
       }
     )

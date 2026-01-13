@@ -36,32 +36,19 @@ async def razorpay_webhook(request: Request):
     payment = payload['payload']['payment']['entity']
     notes = payment.get('notes', {})
 
-    if isinstance(notes, list):
-      notes = {}
+    internal_order_id = notes.get('internal_order_id')
+    payment_id = payment.get('id')
 
-    stall_id = notes.get('stall_id')
-    user_id = notes.get('user_uid')
-
-    if not stall_id:
-      stall_id = "manual_test_stall"
-
-    order_data = {
-      "order_id": payment['order_id'],
-      "payment_id": payment['id'],
-      "amount": payment['amount'] / 100,
-      "status": "PAID",
-      "stall_id": stall_id,
-      "user_id": user_id,
-      "created_at": firestore.SERVER_TIMESTAMP
-    }
-
-    try:
-      db.collection('orders').add(order_data)
-    except Exception as e:
-      print(f"Error saving order to Firestore: {e}")
-      raise HTTPException(status_code=500, detail="Failed to save order")
-
-  else:
-    print(f"⏭️  Skipping event: {event_type}")
+    if internal_order_id:
+      order_ref = db.collection('orders').document(internal_order_id)
+      order_ref.update({
+        "status": "PAID",
+        "payment_id": payment_id,
+        "razorpay_payment_data": payment,
+        "updated_at": firestore.SERVER_TIMESTAMP
+      })
+      print(f"✅ Order {internal_order_id} marked as PAID")
+    else:
+      print(f"⚠️ Payment received without internal_order_id: {payment['id']}")
 
   return {"status": "ok"}

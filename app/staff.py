@@ -5,7 +5,7 @@ from dotenv import load_dotenv
 import json
 import google.generativeai as genai
 from fastapi import UploadFile
-from .schema import MenuSchema, UpdateMenuItemSchema, AddStaffSchema
+from .schema import MenuSchema, UpdateMenuItemSchema, AddStaffSchema, UpdateOrderStatusSchema
 from fastapi.responses import JSONResponse
 from starlette import status
 from .firebase_init import db
@@ -454,3 +454,81 @@ async def scan_menu_image(file: UploadFile, id_token: str):
       status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
       content={"message": f"Internal Server Error: {str(e)}"}
     )
+
+async def get_stall_orders(id_token: str, status_filter: str = "PAID"):
+  try:
+    staff_data, _ = await get_staff_details(id_token)
+
+    if not staff_data:
+      return JSONResponse(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        content={"message": "Invalid or expired token."}
+      )
+
+    stall_id = staff_data.get("stall_id")
+
+    orders_ref = (
+      db.collection("orders")
+      .where("stall_id", "==", stall_id)
+      .where("status", "==", status_filter)
+      .order_by("created_at", direction=firestore.Query.DESCENDING)
+    )
+
+    docs = orders_ref.stream()
+
+    orders_list = []
+    for doc in docs:
+      data = doc.to_dict()
+      data['order_id'] = doc.id
+
+      data = serialize_firestore_data(data)
+
+      orders_list.append(data)
+
+    return JSONResponse(
+      status_code=status.HTTP_200_OK,
+      content={
+        "stall_id": stall_id,
+        "count": len(orders_list),
+        "orders": orders_list
+      }
+    )
+
+  except Exception as e:
+    return JSONResponse(
+      status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+      content={"message": str(e)}
+    )
+
+async def update_order_status_staff(order_id: str, status_data: UpdateOrderStatusSchema, id_token: str):
+  try:
+    staff_data, _ = await get_staff_details(id_token)
+    if not staff_data:
+      return JSONResponse(status_code=status.HTTP_401_UNAUTHORIZED, content={"message": "Unauthorized"})
+
+    stall_id = staff_data.get("stall_id")
+
+    order_ref = db.collection("orders").document(order_id)
+    order_doc = order_ref.get()
+
+    if not order_doc.exists:
+      return JSONResponse(status_code=status.HTTP_404_NOT_FOUND, content={"message": "Order not found"})
+
+    order_data = order_doc.to_dict()
+
+    if order_data.get("stall_id") != stall_id:
+      return JSONResponse(
+        status_code=status.HTTP_403_FORBIDDEN,
+        content={"message": "You cannot update orders from other stalls."}
+      )
+
+    order_ref.update({
+      "status": status_data.status,
+      "updated_at": firestore.SERVER_TIMESTAMP,
+      "updated_by": staff_data.get("email")
+    })
+
+    return JSONResponse(status_code=status.HTTP_200_OK, content={"message": f"Order status updated to {status_data.status}"})
+
+  except Exception as e:
+    return JSONResponse(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, content={"message": str(e)})

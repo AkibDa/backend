@@ -50,3 +50,19 @@ class CartItemSchema(BaseModel):
 class CreateOrderSchema(BaseModel):
   stall_id: str
   items: List[CartItemSchema]
+
+class OrderItemSchema(BaseModel):
+  name: str
+  quantity: int
+  price: float
+
+class OrderResponseSchema(BaseModel):
+  order_id: str
+  user_id: str
+  amount: float
+  status: str
+  items: List[OrderItemSchema]
+  created_at: str
+
+class UpdateOrderStatusSchema(BaseModel):
+  status: str

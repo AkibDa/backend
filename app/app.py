@@ -1,4 +1,4 @@
-# app/app.py
+ # app/app.py
 
 import os
 from fastapi import FastAPI, Security, File, UploadFile
@@ -10,7 +10,8 @@ from .schema import (
   UpdateStaffEmailSchema,
   UpdateMenuItemSchema,
   MenuScanResponse,
-  CreateOrderSchema
+  CreateOrderSchema,
+  UpdateOrderStatusSchema
 )
 from .auth import (
   authenticate_student,
@@ -23,13 +24,15 @@ from .staff import (
   update_menu_item,
   delete_menu_item,
   add_staff_member,
+  get_stall_orders,
+  update_order_status_staff
 )
 from .manager import (
   get_my_staff,
   remove_staff_member,
   update_staff_email,
 )
-from .user import get_user_menu, create_payment_order
+from .user import get_user_menu, create_payment_order, get_user_orders
 from .webhook import router as webhook_router
 
 app = FastAPI()
@@ -37,10 +40,8 @@ app = FastAPI()
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
-        "http://localhost:3000",
-        "http://127.0.0.1:3000",
-        "http://localhost:5173",     
-        "http://127.0.0.1:5173",
+        "http://localhost:5000",
+        "http://127.0.0.1:5000",
     ],
     allow_credentials=True,
     allow_methods=["*"],
@@ -79,6 +80,12 @@ async def create_order_endpoint(
     credentials: HTTPAuthorizationCredentials = Security(security)
 ):
     return await create_payment_order(order_data, credentials.credentials)
+
+@app.get("/user/orders", tags=["user"])
+async def get_student_orders_endpoint(
+    credentials: HTTPAuthorizationCredentials = Security(security)
+):
+    return await get_user_orders(credentials.credentials)
 
 @app.post('/staff/add-member', tags=["manager"])
 async def add_staff_endpoint(
@@ -152,3 +159,18 @@ async def delete_menu_item_endpoint(
         item_id,
         credentials.credentials
     )
+
+@app.get("/staff/orders", tags=["staff", "manager"])
+async def get_staff_orders_endpoint(
+    status: str = "PAID",
+    credentials: HTTPAuthorizationCredentials = Security(security)
+):
+    return await get_stall_orders(credentials.credentials, status_filter=status)
+
+@app.patch("/staff/orders/{order_id}/status", tags=["staff", "manager"])
+async def update_order_status_endpoint(
+    order_id: str,
+    status_data: UpdateOrderStatusSchema,
+    credentials: HTTPAuthorizationCredentials = Security(security)
+):
+    return await update_order_status_staff(order_id, status_data, credentials.credentials)

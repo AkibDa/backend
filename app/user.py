@@ -1,7 +1,7 @@
 #app/user.py
 
 import os
-import random
+import secrets
 import razorpay
 from fastapi.responses import JSONResponse
 from starlette import status
@@ -85,7 +85,7 @@ async def verify_payment_and_update_order(payment_data: VerifyPaymentSchema, id_
                 content={"message": "Order not found"}
             )
 
-        pickup_code = str(random.randint(1000, 9999))
+        pickup_code = str(1000 + secrets.randbelow(9000))
 
         order_ref.update({
             "razorpay_payment_id": payment_data.razorpay_payment_id,

@@ -3,7 +3,7 @@
 import os
 import hmac
 import hashlib
-import random
+import secrets
 from fastapi import APIRouter, Request, HTTPException
 from firebase_admin import firestore
 from .firebase_init import db
@@ -56,7 +56,7 @@ async def razorpay_webhook(request: Request):
           print(f"ℹ️ Order {internal_order_id} was already PAID. Skipping update.")
           return
 
-        pickup_code = str(random.randint(1000, 9999))
+        pickup_code = str(1000 + secrets.randbelow(9000))
 
         transaction.update(order_ref, {
           "status": "PAID",

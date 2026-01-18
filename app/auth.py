@@ -80,7 +80,10 @@ async def authenticate_student(token: str):
       try:
         auth.delete_user(uid)
       except Exception:
-        pass
+        return _create_response(
+          status.HTTP_500_INTERNAL_SERVER_ERROR,
+          "College domain not registered and failed to delete unregistered user."
+        )
 
       return _create_response(
         status.HTTP_403_FORBIDDEN,

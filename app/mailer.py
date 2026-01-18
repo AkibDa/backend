@@ -1,4 +1,6 @@
-import os 
+#app/mailer.py
+
+import os
 from sendgrid import SendGridAPIClient
 from sendgrid.helpers.mail import Mail
 

@@ -158,25 +158,40 @@ async def get_my_staff_profile(id_token:str):
     }
   )
 
+
 async def get_staff_me(id_token: str):
-    staff_data, staff_uid = await get_staff_details(id_token)
+  staff_data, staff_uid = await get_staff_details(id_token)
 
-    if not staff_data:
-        return JSONResponse(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            content={"message": "Unauthorized"}
-        )
-
+  if not staff_data:
     return JSONResponse(
-        status_code=status.HTTP_200_OK,
-        content={
-            "uid": staff_uid,
-            "email": staff_data.get("email"),
-            "role": staff_data.get("role"),
-            "stall_id": staff_data.get("stall_id"),
-            "college_id": staff_data.get("college_id"),
-        }
+      status_code=status.HTTP_401_UNAUTHORIZED,
+      content={"message": "Unauthorized"}
     )
+
+  stall_name = "Unknown Stall"
+  try:
+    stall_doc = db.collection("colleges") \
+      .document(staff_data.get("college_id")) \
+      .collection("stalls") \
+      .document(staff_data.get("stall_id")) \
+      .get()
+
+    if stall_doc.exists:
+      stall_name = stall_doc.to_dict().get("name", "Unknown Stall")
+  except Exception as e:
+    print(f"Error fetching stall name: {e}")
+
+  return JSONResponse(
+    status_code=status.HTTP_200_OK,
+    content={
+      "uid": staff_uid,
+      "email": staff_data.get("email"),
+      "role": staff_data.get("role"),
+      "stall_id": staff_data.get("stall_id"),
+      "stall_name": stall_name,
+      "college_id": staff_data.get("college_id"),
+    }
+  )
 
 async def activate_staff(id_token: str):
   decoded = auth.verify_id_token(id_token)
@@ -628,8 +643,12 @@ async def verify_order_pickup(verify_data: VerifyPickupSchema, id_token: str):
     if data.get("stall_id") != staff_data.get("stall_id"):
       return JSONResponse(status_code=status.HTTP_403_FORBIDDEN, content={"message": "Wrong stall"})
 
-    if data.get("status") != "PAID":
-      return JSONResponse(status_code=status.HTTP_400_BAD_REQUEST, content={"message": "Order is not PAID yet."})
+    current_status = data.get("status")
+    if current_status not in ["PAID", "READY"]:
+      return JSONResponse(
+        status_code=status.HTTP_400_BAD_REQUEST,
+        content={"message": f"Cannot verify. Order status is {current_status}."}
+      )
 
     stored_code = data.get("pickup_code")
     if stored_code != verify_data.pickup_code:

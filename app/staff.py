@@ -5,7 +5,7 @@ from dotenv import load_dotenv
 import json
 import google.generativeai as genai
 from fastapi import UploadFile
-from .schema import MenuSchema, UpdateMenuItemSchema, AddStaffSchema, UpdateOrderStatusSchema, VerifyPickupSchema
+from .schema import MenuSchema, UpdateMenuItemSchema, AddStaffSchema, UpdateOrderStatusSchema, VerifyPickupSchema, UpdateStaffProfileSchema
 from fastapi.responses import JSONResponse
 from starlette import status
 from .firebase_init import db
@@ -158,7 +158,6 @@ async def get_my_staff_profile(id_token:str):
     }
   )
 
-
 async def get_staff_me(id_token: str):
   staff_data, staff_uid = await get_staff_details(id_token)
 
@@ -212,6 +211,28 @@ async def activate_staff(id_token: str):
   })
 
   return JSONResponse(status_code=200,content={"message": "Staff activated"})
+
+async def update_staff_profile(profile_data: UpdateStaffProfileSchema, id_token: str):
+  try:
+    staff_data, uid = await get_staff_details(id_token)
+
+    if not staff_data:
+      return JSONResponse(status_code=status.HTTP_401_UNAUTHORIZED, content={"message": "Unauthorized"})
+
+    ref = db.collection("staffs").document(uid)
+
+    ref.update({
+      "name": profile_data.name,
+      "phone": profile_data.phone,
+      "updated_at": firestore.SERVER_TIMESTAMP
+    })
+
+    return JSONResponse(
+      status_code=status.HTTP_200_OK,
+      content={"message": "Profile updated successfully"}
+    )
+  except Exception as e:
+    return JSONResponse(status_code=500, content={"message": str(e)})
 
 async def upload_menu(menu_data: MenuSchema, id_token: str):
   try:

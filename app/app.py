@@ -14,7 +14,8 @@ from .schema import (
   UpdateOrderStatusSchema,
   UpdateUserProfileSchema,
   VerifyPickupSchema,
-  VerifyPaymentSchema
+  VerifyPaymentSchema,
+  UpdateStaffProfileSchema
 )
 from .auth import (
   authenticate_student,
@@ -29,15 +30,16 @@ from .staff import (
   add_staff_member,
   get_stall_orders,
   update_order_status_staff,
-  get_my_staff_profile,
   get_staff_me,
   verify_order_pickup,
-  activate_staff
+  activate_staff,
+  update_staff_profile
 )
 from .manager import (
   get_my_staff,
   remove_staff_member,
   update_staff_email,
+  get_stall_performance_overview
 )
 from .user import (
   get_user_menu,
@@ -65,7 +67,6 @@ app.add_middleware(
 
 security = HTTPBearer()
 
-app.include_router(webhook_router)
 
 @app.get("/health", tags=["health"])
 def health_check():
@@ -74,6 +75,8 @@ def health_check():
         "service": "greenplate-backend",
         "environment": os.getenv("ENV", "development")
     }
+
+app.include_router(webhook_router)
 
 @app.post('/auth/verify-staff', tags=["auth"])
 async def verify_staff_endpoint(credentials: HTTPAuthorizationCredentials = Security(security)):
@@ -116,18 +119,20 @@ async def verify_order_endpoint(
 ):
     return await verify_payment_and_update_order( payment_data, credentials.credentials )
 
+@app.get("/staff/performance/overview", tags=["manager"])
+async def get_stall_performance_overview_endpoint(
+    month: int,
+    year: int,
+    credentials: HTTPAuthorizationCredentials = Security(security)
+):
+    return await get_stall_performance_overview(month, year, credentials.credentials)
+
 @app.post('/staff/add-member', tags=["manager"])
 async def add_staff_endpoint(
     staff_data: AddStaffSchema,
     credentials: HTTPAuthorizationCredentials = Security(security)
 ):
     return await add_staff_member(staff_data, credentials.credentials)
-
-@app.post("/staff/activate",tags=["staff"])
-async def activate_staff_endpoint(
-    credentials:HTTPAuthorizationCredentials = Security(security)
-):
-    return await activate_staff(credentials.credentials)
 
 @app.get('/staff/list', tags=["manager"])
 async def get_staff_list_endpoint(
@@ -150,11 +155,24 @@ async def update_staff_email_endpoint(
 ):
     return await update_staff_email(staff_uid, update_data.new_email, credentials.credentials)
 
+@app.post("/staff/activate",tags=["staff", "manager"])
+async def activate_staff_endpoint(
+    credentials:HTTPAuthorizationCredentials = Security(security)
+):
+    return await activate_staff(credentials.credentials)
+
 @app.get("/staff/me", tags=["staff", "manager"])
 async def get_staff_me_endpoint(
     credentials: HTTPAuthorizationCredentials = Security(security)
 ):
     return await get_staff_me(credentials.credentials)
+
+@app.patch("/staff/profile", tags=["staff", "manager"])
+async def update_staff_profile_endpoint(
+    profile_data: UpdateStaffProfileSchema,
+    credentials: HTTPAuthorizationCredentials = Security(security)
+):
+    return await update_staff_profile(profile_data, credentials.credentials)
 
 @app.post("/staff/menu", tags=["staff", "manager"])
 async def upload_menu_endpoint(

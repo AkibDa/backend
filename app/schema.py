@@ -20,6 +20,10 @@ class UpdateUserProfileSchema(BaseModel):
   roll_number: str = Field(..., min_length=1)
   phone: Optional[str] = None
 
+class UpdateStaffProfileSchema(BaseModel):
+  name: str = Field(..., min_length=2)
+  phone: Optional[str] = None
+
 class MenuItemSchema(BaseModel):
     name: str
     price: float = Field(..., gt=0)
@@ -84,3 +88,17 @@ class VerifyPaymentSchema(BaseModel):
 class VerifyPickupSchema(BaseModel):
   order_id: str
   pickup_code: str = Field(..., min_length=4, max_length=4, description="4-digit pickup code")
+
+class StaffStats(BaseModel):
+  uid: str
+  name: str
+  email: str
+  role: str
+  month_total: int
+  today_total: int
+  last_active: Optional[str] = None
+
+class StallPerformanceResponse(BaseModel):
+  stall_id: str
+  period: str
+  staff_stats: List[StaffStats]

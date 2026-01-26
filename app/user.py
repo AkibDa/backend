@@ -9,6 +9,7 @@ from firebase_admin import auth
 from .firebase_init import db, firestore
 from datetime import datetime, timedelta
 from .schema import CreateOrderSchema, UpdateUserProfileSchema, VerifyPaymentSchema
+from google.cloud.firestore_v1.transaction import Transaction
 
 razorpay_client = razorpay.Client(auth=(
     os.environ.get("RAZORPAY_KEY_ID"),
@@ -416,6 +417,7 @@ async def cancel_order(order_id: str, id_token: str):
 
       resale_item = {
         "original_order_id": order_id,
+        "original_user_id": user_uid,
         "college_id": college_id,
         "stall_id": stall_id,
         "stall_name": order_data.get("stall_name"),
@@ -454,6 +456,115 @@ async def cancel_order(order_id: str, id_token: str):
   except Exception as e:
     return JSONResponse(status_code=500, content={"message": str(e)})
 
+async def buy_resale_item(resale_id: str, id_token: str):
+  try:
+    user_data, user_uid = await get_user_details(id_token)
+    if not user_data:
+      return JSONResponse(status_code=401, content={"message": "Unauthorized"})
+
+    resale_ref = db.collection("resale_items").document(resale_id)
+
+    if resale_ref.get("original_user_id") == user_uid:
+      raise Exception("You cannot purchase your own cancelled order.")
+
+    transaction = db.transaction()
+
+    @firestore.transactional
+    def reserve_item_transaction(transaction, resale_ref):
+      snapshot = resale_ref.get(transaction=transaction)
+
+      if not snapshot.exists:
+        raise Exception("Item not found")
+
+      data = snapshot.to_dict()
+      current_status = data.get("status")
+      last_updated = data.get("reserved_at")
+
+      is_available = (current_status == "AVAILABLE")
+
+      if current_status == "RESERVED" and last_updated:
+        reservation_time = last_updated
+        if now - reservation_time.replace(tzinfo=None) > timedelta(minutes=5):
+          is_available = True
+
+      if not is_available:
+        raise Exception("Item is currently being purchased by someone else.")
+
+      transaction.update(resale_ref, {
+        "status": "RESERVED",
+        "reserved_by": user_uid,
+        "reserved_at": firestore.SERVER_TIMESTAMP
+      })
+
+      return data
+
+    try:
+      now = datetime.now()
+      resale_data = reserve_item_transaction(transaction, resale_ref)
+
+      discounted_price = resale_data.get("discounted_price", 0)
+
+      user_snapshot = {
+        "name": user_data.get("name", "Unknown"),
+        "phone": user_data.get("phone", "")
+      }
+
+      new_order_ref = db.collection('orders').document()
+      internal_order_id = new_order_ref.id
+
+      firestore_order_data = {
+        "user_id": user_uid,
+        "user_details": user_snapshot,
+        "stall_id": resale_data.get("stall_id"),
+        "stall_name": resale_data.get("stall_name"),
+        "college_id": resale_data.get("college_id"),
+        "items": resale_data.get("items", []),
+        "total_amount": discounted_price,
+        "status": "PENDING",
+        "order_type": "RESALE",
+        "resale_item_ref": resale_id,
+        "created_at": firestore.SERVER_TIMESTAMP,
+        "updated_at": firestore.SERVER_TIMESTAMP
+      }
+
+      payment_payload = {
+        "amount": int(discounted_price * 100),
+        "currency": "INR",
+        "receipt": f"resale_{internal_order_id[:8]}",
+        "notes": {
+          "stall_id": resale_data.get("stall_id"),
+          "user_uid": user_uid,
+          "college_id": resale_data.get("college_id"),
+          "internal_order_id": internal_order_id,
+          "type": "RESALE",
+          "resale_item_id": resale_id
+        }
+      }
+
+      razorpay_order = razorpay_client.order.create(data=payment_payload)
+
+      firestore_order_data["razorpay_order_id"] = razorpay_order['id']
+
+      new_order_ref.set(firestore_order_data)
+
+      return JSONResponse(
+        status_code=200,
+        content={
+          "id": razorpay_order['id'],
+          "amount": razorpay_order['amount'],
+          "currency": razorpay_order['currency'],
+          "key_id": os.environ.get("RAZORPAY_KEY_ID"),
+          "internal_order_id": internal_order_id,
+          "message": "Item reserved. Please complete payment in 5 minutes."
+        }
+      )
+
+    except Exception as e:
+      return JSONResponse(status_code=409, content={"message": str(e)})
+
+  except Exception as e:
+    return JSONResponse(status_code=500, content={"message": str(e)})
+
 async def get_discounted_feed(id_token: str):
   try:
     user_data, _ = await get_user_details(id_token)
@@ -461,11 +572,12 @@ async def get_discounted_feed(id_token: str):
       return JSONResponse(status_code=401, content={"message": "Unauthorized"})
 
     college_id = user_data.get("college_id")
+    now = datetime.now()
 
     resale_ref = (
       db.collection("resale_items")
       .where("college_id", "==", college_id)
-      .where("status", "==", "AVAILABLE")
+      .where("status", "in", ["AVAILABLE", "RESERVED"])
       .order_by("created_at", direction=firestore.Query.DESCENDING)
     )
 
@@ -474,6 +586,12 @@ async def get_discounted_feed(id_token: str):
     feed_items = []
     for doc in docs:
       data = doc.to_dict()
+
+      if data.get("status") == "RESERVED":
+        reserved_at = data.get("reserved_at")
+        if reserved_at and (now - reserved_at.replace(tzinfo=None)) < timedelta(minutes=5):
+          continue
+
       data["resale_id"] = doc.id
       data = serialize_firestore_data(data)
       feed_items.append(data)

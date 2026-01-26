@@ -48,7 +48,8 @@ from .user import (
   verify_payment_and_update_order,
   update_user_profile,
   cancel_order,
-  get_discounted_feed
+  get_discounted_feed,
+  buy_resale_item
 )
 from .webhook import router as webhook_router
 
@@ -135,6 +136,13 @@ async def cancel_order_endpoint(
     credentials: HTTPAuthorizationCredentials = Security(security)
 ):
     return await cancel_order(order_id, credentials.credentials)
+
+@app.post("/user/resale/{resale_id}/buy", tags=["user"])
+async def buy_resale_item_endpoint(
+    resale_id: str,
+    credentials: HTTPAuthorizationCredentials = Security(security)
+):
+    return await buy_resale_item(resale_id, credentials.credentials)
 
 @app.get("/staff/performance/overview", tags=["manager"])
 async def get_stall_performance_overview_endpoint(

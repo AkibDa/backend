@@ -38,6 +38,9 @@ async def razorpay_webhook(request: Request):
     internal_order_id = notes.get('internal_order_id')
     payment_id = payment.get('id')
 
+    is_resale = notes.get('type') == 'RESALE'
+    resale_item_id = notes.get('resale_item_id')
+
     if internal_order_id:
       order_ref = db.collection('orders').document(internal_order_id)
 
@@ -66,6 +69,15 @@ async def razorpay_webhook(request: Request):
           "updated_at": firestore.SERVER_TIMESTAMP
         })
         print(f"✅ SUCCESS: Generated Pickup Code {pickup_code} for Order {internal_order_id}")
+
+        if is_resale and resale_item_id:
+          resale_ref = db.collection("resale_items").document(resale_item_id)
+          transaction.update(resale_ref, {
+            "status": "SOLD",
+            "sold_to_order_id": internal_order_id,
+            "sold_at": firestore.SERVER_TIMESTAMP
+          })
+          print(f"✅ SUCCESS: Marked Resale Item {resale_item_id} as SOLD")
 
       try:
         update_in_transaction(transaction, order_ref)

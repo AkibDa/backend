@@ -7,7 +7,7 @@ from fastapi.responses import JSONResponse
 from starlette import status
 from firebase_admin import auth
 from .firebase_init import db, firestore
-from datetime import datetime
+from datetime import datetime, timedelta
 from .schema import CreateOrderSchema, UpdateUserProfileSchema, VerifyPaymentSchema
 
 razorpay_client = razorpay.Client(auth=(
@@ -354,3 +354,248 @@ def normalize_order_status(status:str):
       "READY": "Ready",
       "COMPLETED": "Completed"
    }.get(status,"Unknown")
+
+async def cancel_order(order_id: str, id_token: str):
+  try:
+    user_data, user_uid = await get_user_details(id_token)
+    if not user_data:
+      return JSONResponse(status_code=status.HTTP_401_UNAUTHORIZED, content={"message": "Unauthorized"})
+
+    now = datetime.now()
+
+    week_start = user_data.get("cancellation_week_start")
+    current_count = user_data.get("cancellations_this_week", 0)
+
+    if week_start:
+      if isinstance(week_start, str):
+        week_start = datetime.fromisoformat(week_start)
+    else:
+      week_start = now
+
+    if (now.replace(tzinfo=None) - week_start.replace(tzinfo=None)).days >= 7:
+      current_count = 0
+      week_start = now
+      db.collection("users").document(user_uid).update({
+        "cancellation_week_start": firestore.SERVER_TIMESTAMP,
+        "cancellations_this_week": 0
+      })
+
+    if current_count >= 2:
+      return JSONResponse(
+        status_code=status.HTTP_400_BAD_REQUEST,
+        content={"message": "Cancellation limit reached. You can only cancel 2 orders per week."}
+      )
+
+    order_ref = db.collection("orders").document(order_id)
+    order_doc = order_ref.get()
+
+    if not order_doc.exists:
+      return JSONResponse(status_code=404, content={"message": "Order not found"})
+
+    order_data = order_doc.to_dict()
+
+    if order_data.get("user_id") != user_uid:
+      return JSONResponse(status_code=403, content={"message": "You do not own this order"})
+
+    current_status = order_data.get("status")
+
+    if current_status in ["CLAIMED", "COMPLETED", "CANCELLED"]:
+      return JSONResponse(
+        status_code=400,
+        content={"message": f"Cannot cancel order with status: {current_status}"}
+      )
+
+    resale_created = False
+
+    if current_status == "READY":
+      college_id = order_data.get("college_id")
+      stall_id = order_data.get("stall_id")
+      original_price = order_data.get("total_amount", 0)
+
+      discounted_price = original_price * 0.5
+
+      resale_item = {
+        "original_order_id": order_id,
+        "original_user_id": user_uid,
+        "college_id": college_id,
+        "stall_id": stall_id,
+        "stall_name": order_data.get("stall_name"),
+        "items": order_data.get("items", []),
+        "original_price": original_price,
+        "discounted_price": discounted_price,
+        "status": "AVAILABLE",
+        "created_at": firestore.SERVER_TIMESTAMP
+      }
+
+      db.collection("resale_items").add(resale_item)
+      resale_created = True
+
+    batch = db.batch()
+
+    batch.update(order_ref, {
+      "status": "CANCELLED",
+      "cancelled_at": firestore.SERVER_TIMESTAMP,
+      "cancellation_reason": "User requested"
+    })
+
+    user_ref = db.collection("users").document(user_uid)
+    batch.update(user_ref, {
+      "cancellations_this_week": current_count + 1,
+      "cancellation_week_start": week_start
+    })
+
+    batch.commit()
+
+    msg = "Order cancelled."
+    if resale_created:
+      msg += " Item has been added to the discounted feed."
+
+    return JSONResponse(status_code=200, content={"message": msg, "resale_created": resale_created})
+
+  except Exception as e:
+    return JSONResponse(status_code=500, content={"message": str(e)})
+
+async def buy_resale_item(resale_id: str, id_token: str):
+  try:
+    user_data, user_uid = await get_user_details(id_token)
+    if not user_data:
+      return JSONResponse(status_code=401, content={"message": "Unauthorized"})
+
+    resale_ref = db.collection("resale_items").document(resale_id)
+
+    if resale_ref.get("original_user_id") == user_uid:
+      raise Exception("You cannot purchase your own cancelled order.")
+
+    transaction = db.transaction()
+
+    @firestore.transactional
+    def reserve_item_transaction(transaction, resale_ref):
+      snapshot = resale_ref.get(transaction=transaction)
+
+      if not snapshot.exists:
+        raise Exception("Item not found")
+
+      data = snapshot.to_dict()
+      current_status = data.get("status")
+      last_updated = data.get("reserved_at")
+
+      is_available = (current_status == "AVAILABLE")
+
+      if current_status == "RESERVED" and last_updated:
+        reservation_time = last_updated
+        if now - reservation_time.replace(tzinfo=None) > timedelta(minutes=5):
+          is_available = True
+
+      if not is_available:
+        raise Exception("Item is currently being purchased by someone else.")
+
+      transaction.update(resale_ref, {
+        "status": "RESERVED",
+        "reserved_by": user_uid,
+        "reserved_at": firestore.SERVER_TIMESTAMP
+      })
+
+      return data
+
+    try:
+      now = datetime.now()
+      resale_data = reserve_item_transaction(transaction, resale_ref)
+
+      discounted_price = resale_data.get("discounted_price", 0)
+
+      user_snapshot = {
+        "name": user_data.get("name", "Unknown"),
+        "phone": user_data.get("phone", "")
+      }
+
+      new_order_ref = db.collection('orders').document()
+      internal_order_id = new_order_ref.id
+
+      firestore_order_data = {
+        "user_id": user_uid,
+        "user_details": user_snapshot,
+        "stall_id": resale_data.get("stall_id"),
+        "stall_name": resale_data.get("stall_name"),
+        "college_id": resale_data.get("college_id"),
+        "items": resale_data.get("items", []),
+        "total_amount": discounted_price,
+        "status": "PENDING",
+        "order_type": "RESALE",
+        "resale_item_ref": resale_id,
+        "created_at": firestore.SERVER_TIMESTAMP,
+        "updated_at": firestore.SERVER_TIMESTAMP
+      }
+
+      payment_payload = {
+        "amount": int(discounted_price * 100),
+        "currency": "INR",
+        "receipt": f"resale_{internal_order_id[:8]}",
+        "notes": {
+          "stall_id": resale_data.get("stall_id"),
+          "user_uid": user_uid,
+          "college_id": resale_data.get("college_id"),
+          "internal_order_id": internal_order_id,
+          "type": "RESALE",
+          "resale_item_id": resale_id
+        }
+      }
+
+      razorpay_order = razorpay_client.order.create(data=payment_payload)
+
+      firestore_order_data["razorpay_order_id"] = razorpay_order['id']
+
+      new_order_ref.set(firestore_order_data)
+
+      return JSONResponse(
+        status_code=200,
+        content={
+          "id": razorpay_order['id'],
+          "amount": razorpay_order['amount'],
+          "currency": razorpay_order['currency'],
+          "key_id": os.environ.get("RAZORPAY_KEY_ID"),
+          "internal_order_id": internal_order_id,
+          "message": "Item reserved. Please complete payment in 5 minutes."
+        }
+      )
+
+    except Exception as e:
+      return JSONResponse(status_code=409, content={"message": str(e)})
+
+  except Exception as e:
+    return JSONResponse(status_code=500, content={"message": str(e)})
+
+async def get_discounted_feed(id_token: str):
+  try:
+    user_data, _ = await get_user_details(id_token)
+    if not user_data:
+      return JSONResponse(status_code=401, content={"message": "Unauthorized"})
+
+    college_id = user_data.get("college_id")
+    now = datetime.now()
+
+    resale_ref = (
+      db.collection("resale_items")
+      .where("college_id", "==", college_id)
+      .where("status", "in", ["AVAILABLE", "RESERVED"])
+      .order_by("created_at", direction=firestore.Query.DESCENDING)
+    )
+
+    docs = resale_ref.stream()
+
+    feed_items = []
+    for doc in docs:
+      data = doc.to_dict()
+
+      if data.get("status") == "RESERVED":
+        reserved_at = data.get("reserved_at")
+        if reserved_at and (now - reserved_at.replace(tzinfo=None)) < timedelta(minutes=5):
+          continue
+
+      data["resale_id"] = doc.id
+      data = serialize_firestore_data(data)
+      feed_items.append(data)
+
+    return JSONResponse(status_code=200, content=feed_items)
+
+  except Exception as e:
+    return JSONResponse(status_code=500, content={"message": str(e)})

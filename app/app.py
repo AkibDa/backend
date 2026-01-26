@@ -46,7 +46,10 @@ from .user import (
   create_payment_order,
   get_user_orders,
   verify_payment_and_update_order,
-  update_user_profile
+  update_user_profile,
+  cancel_order,
+  get_discounted_feed,
+  buy_resale_item
 )
 from .webhook import router as webhook_router
 
@@ -104,6 +107,12 @@ async def get_student_menu_endpoint(
 ):
     return await get_user_menu(credentials.credentials)
 
+@app.get("/user/feed/discounted", tags=["user"])
+async def get_discounted_feed_endpoint(
+    credentials: HTTPAuthorizationCredentials = Security(security)
+):
+    return await get_discounted_feed(credentials.credentials)
+
 @app.post("/user/order/create", tags=["user"])
 async def create_order_endpoint(
     order_data: CreateOrderSchema,
@@ -123,6 +132,20 @@ async def verify_order_endpoint(
     credentials: HTTPAuthorizationCredentials = Security(security)
 ):
     return await verify_payment_and_update_order( payment_data, credentials.credentials )
+
+@app.post("/user/order/{order_id}/cancel", tags=["user"])
+async def cancel_order_endpoint(
+    order_id: str,
+    credentials: HTTPAuthorizationCredentials = Security(security)
+):
+    return await cancel_order(order_id, credentials.credentials)
+
+@app.post("/user/resale/{resale_id}/buy", tags=["user"])
+async def buy_resale_item_endpoint(
+    resale_id: str,
+    credentials: HTTPAuthorizationCredentials = Security(security)
+):
+    return await buy_resale_item(resale_id, credentials.credentials)
 
 @app.get("/staff/performance/overview", tags=["manager"])
 async def get_stall_performance_overview_endpoint(

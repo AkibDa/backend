@@ -17,6 +17,9 @@ async def razorpay_webhook(request: Request):
   body = await request.body()
 
   try:
+    if not secret:
+      raise Exception("RAZORPAY_WEBHOOK_SECRET not set")
+
     expected_signature = hmac.new(
       key=secret.encode(),
       msg=body,
@@ -25,7 +28,8 @@ async def razorpay_webhook(request: Request):
 
     if not hmac.compare_digest(expected_signature, signature):
       raise HTTPException(status_code=400, detail="Invalid signature")
-  except Exception:
+  except Exception as e:
+    print(f"Webhook Signature Error: {e}")
     raise HTTPException(status_code=400, detail="Signature verification failed")
 
   payload = await request.json()
@@ -86,5 +90,52 @@ async def razorpay_webhook(request: Request):
 
     else:
       print(f"⚠️ Payment received without internal_order_id: {payment.get('id')}")
+
+  elif event_type == 'refund.processed':
+    try:
+      refund_entity = payload['payload']['refund']['entity']
+      payment_id = refund_entity.get('payment_id')
+
+      notes = refund_entity.get('notes', {})
+      order_id = notes.get('order_id')
+
+      if order_id:
+        order_ref = db.collection('orders').document(order_id)
+
+        snapshot = order_ref.get()
+        if snapshot.exists:
+          if snapshot.to_dict().get("refund", {}).get("status") == "COMPLETED":
+            print("ℹ️ Refund already completed, skipping")
+            return
+
+        order_ref.update({
+          "refund.status": "COMPLETED",
+          "refund.processed_at": firestore.SERVER_TIMESTAMP,
+          "refund.razorpay_refund_id": refund_entity.get('id'),
+          "refund.bank_ref": refund_entity.get('acquirer_data', {}).get('rrn'),
+          "updated_at": firestore.SERVER_TIMESTAMP
+        })
+        print(f"✅ REFUND COMPLETE: Order {order_id} refunded successfully.")
+      else:
+        print(f"⚠️ Refund processed but no order_id found in notes. Payment ID: {payment_id}")
+
+    except Exception as e:
+      print(f"❌ Error processing refund webhook: {e}")
+
+  elif event_type == 'refund.failed':
+    try:
+      refund_entity = payload['payload']['refund']['entity']
+      notes = refund_entity.get('notes', {})
+      order_id = notes.get('order_id')
+
+      if order_id:
+        db.collection('orders').document(order_id).update({
+          "refund.status": "FAILED",
+          "refund.failure_reason": refund_entity.get('status_details', {}).get('description', 'Unknown Error'),
+          "updated_at": firestore.SERVER_TIMESTAMP
+        })
+        print(f"❌ REFUND FAILED: Order {order_id}")
+    except Exception as e:
+      print(f"❌ Error handling refund failure: {e}")
 
   return {"status": "ok"}

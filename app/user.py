@@ -98,6 +98,14 @@ async def verify_payment_and_update_order(payment_data: VerifyPaymentSchema, id_
                 content={"message": "Order not found"}
             )
 
+        current_status = order_doc.to_dict().get("status")
+
+        if current_status == "PAID":
+          return JSONResponse(
+            status_code=200,
+            content={"message": "Payment already verified"}
+          )
+
         pickup_code = str(1000 + secrets.randbelow(9000))
 
         order_ref.update({
@@ -260,6 +268,14 @@ async def create_payment_order(order_data: CreateOrderSchema, id_token: str):
       "user_details": user_snapshot,
       "stall_id": stall_id,
       "stall_name": stall_name,
+      "refund_policy": {
+        "ready_refund_percent": 50,
+        "cancellation_allowed": True
+      },
+      "refund": {
+        "status": "NOT_APPLICABLE",
+        "amount": 0
+      },
       "college_id": college_id,
       "items": order_items,
       "total_amount": total_amount,
@@ -326,13 +342,19 @@ async def get_user_orders(id_token: str):
 
       visible_code = data.get("pickup_code") if data.get("status") in ["PAID", "READY"] else None
 
+      refund_data = data.get("refund")
+      if refund_data:
+        refund_data = serialize_firestore_data(refund_data)
+
       orders.append({
          "id": doc.id,
          "items": data["items"],
          "cafeteriaName": data.get("stall_name", "Unknown Stall"),
          "status": normalize_order_status(data["status"]),
          "qrCode": visible_code,
-        "total_amount": data.get("total_amount", 0)
+        "total_amount": data.get("total_amount", 0),
+        "refund": refund_data,
+        "refund_policy": data.get("refund_policy")
       })
       
     return JSONResponse(
@@ -347,21 +369,44 @@ async def get_user_orders(id_token: str):
     )
 
 def normalize_order_status(status:str):
-   return{
-      "PENDING": "Payment Pending",
-      "PAID": "Reserved",
-      "CLAIMED": "Claimed",
-      "READY": "Ready",
-      "COMPLETED": "Completed"
-   }.get(status,"Unknown")
+  status = status.upper() if status else ""
+  return {
+    "PENDING": "Payment Pending",
+    "PAID": "Reserved",
+    "CLAIMED": "Claimed",
+    "READY": "Ready",
+    "COMPLETED": "Completed",
+    "CANCELLED": "Cancelled"
+  }.get(status, "Unknown")
+
+def calculate_refund(order: dict):
+  total = order.get("total_amount", 0)
+  status = order.get("status")
+
+  if status in ["CREATED"]:
+    return total, "FULL_REFUND"
+
+  if status == "PAID":
+    return total, "FULL_REFUND"
+
+  if status == "READY":
+    percent = (
+      order.get("refund_policy", {})
+      .get("ready_refund_percent", 50)
+    )
+    refund_amount = int(total * percent / 100)
+    return refund_amount, "PARTIAL_REFUND"
+
+  return 0, "NO_REFUND"
 
 async def cancel_order(order_id: str, id_token: str):
   try:
     user_data, user_uid = await get_user_details(id_token)
-    if not user_data:
-      return JSONResponse(status_code=status.HTTP_401_UNAUTHORIZED, content={"message": "Unauthorized"})
 
-    now = datetime.now()
+    if not user_data:
+      return JSONResponse(status_code=401, content={"message": "Unauthorized"})
+
+    now = datetime.utcnow().replace(tzinfo=None)
 
     week_start = user_data.get("cancellation_week_start")
     current_count = user_data.get("cancellations_this_week", 0)
@@ -369,29 +414,27 @@ async def cancel_order(order_id: str, id_token: str):
     if week_start:
       if isinstance(week_start, str):
         week_start = datetime.fromisoformat(week_start)
+      if hasattr(week_start, "tzinfo") and week_start.tzinfo:
+        week_start = week_start.replace(tzinfo=None)
     else:
       week_start = now
 
-    if (now.replace(tzinfo=None) - week_start.replace(tzinfo=None)).days >= 7:
+    if (now - week_start).days >= 7:
       current_count = 0
       week_start = now
-      db.collection("users").document(user_uid).update({
-        "cancellation_week_start": firestore.SERVER_TIMESTAMP,
-        "cancellations_this_week": 0
-      })
 
-    if current_count >= 2:
+    if current_count >= 3:
       return JSONResponse(
-        status_code=status.HTTP_400_BAD_REQUEST,
-        content={"message": "Cancellation limit reached. You can only cancel 2 orders per week."}
+        status_code=400,
+        content={"message": "Weekly cancellation limit reached"}
       )
 
-    order_ref = db.collection("orders").document(order_id)
-    order_doc = order_ref.get()
+    order_doc = db.collection("orders").document(order_id).get()
 
     if not order_doc.exists:
       return JSONResponse(status_code=404, content={"message": "Order not found"})
 
+    order_ref = order_doc.reference
     order_data = order_doc.to_dict()
 
     if order_data.get("user_id") != user_uid:
@@ -399,34 +442,67 @@ async def cancel_order(order_id: str, id_token: str):
 
     current_status = order_data.get("status")
 
-    if current_status in ["CLAIMED", "COMPLETED", "CANCELLED"]:
+    if current_status == "CANCELLED":
+      refund = order_data.get("refund", {})
       return JSONResponse(
-        status_code=400,
-        content={"message": f"Cannot cancel order with status: {current_status}"}
+        status_code=200,
+        content={
+          "message": "Order already cancelled",
+          "refund_amount": refund.get("amount", 0),
+          "refund_type": refund.get("type"),
+          "resale_created": False
+        }
       )
 
+    if current_status in ["CLAIMED", "COMPLETED"]:
+      return JSONResponse(
+        status_code=400,
+        content={"message": f"Cannot cancel order with status {current_status}"}
+      )
+
+    refund_amount, refund_type = calculate_refund(order_data)
+    total_amount = order_data.get("total_amount", 0)
+    payment_id = order_data.get("razorpay_payment_id")
+
+    existing_refund = order_data.get("refund", {})
+
+    refund_status = existing_refund.get("status", "NOT_APPLICABLE")
+    refund_id = existing_refund.get("razorpay_refund_id")
+
+    if refund_amount > 0 and payment_id and refund_status not in ["INITIATED", "COMPLETED"]:
+      try:
+        refund_response = razorpay_client.payment.refund(
+          payment_id,
+          {
+            "amount": int(refund_amount * 100),
+            "speed": "normal",
+            "notes": {
+              "order_id": order_id,
+              "type": refund_type,
+              "reason": "User Cancelled"
+            }
+          }
+        )
+        refund_id = refund_response.get("id")
+        refund_status = "INITIATED"
+      except Exception as e:
+        print("[Refund Error]", e)
+        refund_status = "FAILED"
+
     resale_created = False
-
     if current_status == "READY":
-      college_id = order_data.get("college_id")
-      stall_id = order_data.get("stall_id")
-      original_price = order_data.get("total_amount", 0)
-
-      discounted_price = original_price * 0.5
-
       resale_item = {
         "original_order_id": order_id,
         "original_user_id": user_uid,
-        "college_id": college_id,
-        "stall_id": stall_id,
+        "college_id": order_data.get("college_id"),
+        "stall_id": order_data.get("stall_id"),
         "stall_name": order_data.get("stall_name"),
         "items": order_data.get("items", []),
-        "original_price": original_price,
-        "discounted_price": discounted_price,
+        "original_price": total_amount,
+        "discounted_price": int(total_amount * 0.5),
         "status": "AVAILABLE",
         "created_at": firestore.SERVER_TIMESTAMP
       }
-
       db.collection("resale_items").add(resale_item)
       resale_created = True
 
@@ -435,25 +511,46 @@ async def cancel_order(order_id: str, id_token: str):
     batch.update(order_ref, {
       "status": "CANCELLED",
       "cancelled_at": firestore.SERVER_TIMESTAMP,
-      "cancellation_reason": "User requested"
+      "refund": {
+        "eligible": refund_amount > 0,
+        "amount": refund_amount,
+        "type": refund_type,
+        "status": refund_status,
+        "razorpay_refund_id": refund_id
+      },
+      "staff_payout": {
+        "amount": total_amount - refund_amount,
+        "status": "PENDING"
+      },
+      "updated_at": firestore.SERVER_TIMESTAMP
     })
 
-    user_ref = db.collection("users").document(user_uid)
-    batch.update(user_ref, {
-      "cancellations_this_week": current_count + 1,
-      "cancellation_week_start": week_start
-    })
+    batch.update(
+      db.collection("users").document(user_uid),
+      {
+        "cancellations_this_week": current_count + 1,
+        "cancellation_week_start": week_start
+      }
+    )
 
     batch.commit()
 
-    msg = "Order cancelled."
-    if resale_created:
-      msg += " Item has been added to the discounted feed."
-
-    return JSONResponse(status_code=200, content={"message": msg, "resale_created": resale_created})
+    return JSONResponse(
+      status_code=200,
+      content={
+        "message": f"Order cancelled. Refund status: {refund_status}",
+        "refund_amount": refund_amount,
+        "refund_type": refund_type,
+        "resale_created": resale_created
+      }
+    )
 
   except Exception as e:
-    return JSONResponse(status_code=500, content={"message": str(e)})
+    print("[Cancel Order Error]", repr(e))
+    return JSONResponse(
+      status_code=500,
+      content={"message": "Internal server error"}
+    )
 
 async def buy_resale_item(resale_id: str, id_token: str):
   try:

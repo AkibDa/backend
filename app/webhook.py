@@ -102,6 +102,12 @@ async def razorpay_webhook(request: Request):
       if order_id:
         order_ref = db.collection('orders').document(order_id)
 
+        snapshot = order_ref.get()
+        if snapshot.exists:
+          if snapshot.to_dict().get("refund", {}).get("status") == "COMPLETED":
+            print("ℹ️ Refund already completed, skipping")
+            return
+
         order_ref.update({
           "refund.status": "COMPLETED",
           "refund.processed_at": firestore.SERVER_TIMESTAMP,

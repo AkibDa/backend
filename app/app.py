@@ -16,7 +16,7 @@ from .schema import (
   VerifyPickupSchema,
   VerifyPaymentSchema,
   UpdateStaffProfileSchema,
-  UpdateResalePriceSchema # <--- ADDED THIS IMPORT
+  UpdateResalePriceSchema
 )
 from .auth import (
   authenticate_student,
@@ -210,23 +210,20 @@ async def upload_menu_endpoint(
     menu_data: MenuSchema,
     credentials: HTTPAuthorizationCredentials = Security(security)
 ):
-    token = credentials.credentials
-    return await upload_menu(menu_data, token)
+    return await upload_menu(menu_data, credentials.credentials)
 
 @app.get("/staff/menu", tags=["staff", "manager"])
 async def get_staff_menu(
     credentials: HTTPAuthorizationCredentials = Security(security)
 ):
-    token = credentials.credentials
-    return await get_menu(token)
+    return await get_menu(credentials.credentials)
 
 @app.post("/staff/menu/scan-image", tags=["staff", "manager"], response_model=MenuScanResponse)
 async def scan_menu_endpoint(
     file: UploadFile = File(...),
     credentials: HTTPAuthorizationCredentials = Security(security)
 ):
-    token = credentials.credentials
-    return await scan_menu_image(file, token)
+    return await scan_menu_image(file, credentials.credentials)
 
 @app.patch("/staff/menu/{item_id}", tags=["staff", "manager"])
 async def update_menu_item_endpoint(
@@ -234,21 +231,14 @@ async def update_menu_item_endpoint(
     update_data: UpdateMenuItemSchema,
     credentials: HTTPAuthorizationCredentials = Security(security)
 ):
-    return await update_menu_item(
-        item_id,
-        update_data,
-        credentials.credentials
-    )
+    return await update_menu_item(item_id, update_data, credentials.credentials)
 
 @app.delete("/staff/menu/{item_id}", tags=["staff", "manager"])
 async def delete_menu_item_endpoint(
     item_id: str,
     credentials: HTTPAuthorizationCredentials = Security(security)
 ):
-    return await delete_menu_item(
-        item_id,
-        credentials.credentials
-    )
+    return await delete_menu_item(item_id, credentials.credentials)
 
 @app.get("/staff/orders", tags=["staff", "manager"])
 async def get_staff_orders_endpoint(
@@ -271,13 +261,12 @@ async def verify_pickup_endpoint(
     credentials: HTTPAuthorizationCredentials = Security(security)
 ):
     return await verify_order_pickup(verify_data, credentials.credentials)
-    
 
 @app.get("/staff/resale/items", tags=["staff"])
 async def get_staff_resale_items_endpoint(
-    credenitals: HTTPAuthorizationCredentials = Security(security)
+    credentials: HTTPAuthorizationCredentials = Security(security)
 ):
-    return await get_stall_resale_items(credenitals.credentials)
+    return await get_stall_resale_items(credentials.credentials)
 
 @app.patch("/staff/resale/{resale_id}/price", tags=["staff"])
 async def update_resale_price_endpoint(

@@ -701,7 +701,6 @@ async def verify_order_pickup(verify_data: VerifyPickupSchema, id_token: str):
   except Exception as e:
     return JSONResponse(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, content={"message": str(e)})
 
-
 async def get_stall_resale_items(id_token: str):
   try:
     staff_data, _ = await get_staff_details(id_token)
@@ -710,7 +709,6 @@ async def get_stall_resale_items(id_token: str):
 
     stall_id = staff_data.get("stall_id")
 
-    # Fetch available or reserved resale items for this stall
     docs = (
         db.collection("resale_items")
         .where("stall_id", "==", stall_id)

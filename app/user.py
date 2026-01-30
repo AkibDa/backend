@@ -399,10 +399,6 @@ def calculate_refund(order: dict):
 
   return 0, "NO_REFUND"
 
-# app/user.py
-
-# ... (Keep previous imports and functions like get_user_details, etc.)
-
 async def cancel_order(order_id: str, id_token: str):
   try:
     user_data, user_uid = await get_user_details(id_token)
@@ -411,7 +407,6 @@ async def cancel_order(order_id: str, id_token: str):
 
     now = datetime.now()
 
-    # --- Cancellation Limit Logic (kept same) ---
     week_start = user_data.get("cancellation_week_start")
     current_count = user_data.get("cancellations_this_week", 0)
 
@@ -429,7 +424,7 @@ async def cancel_order(order_id: str, id_token: str):
         "cancellations_this_week": 0
       })
 
-    if current_count >= 20: # Updated limit as per previous context
+    if current_count >= 20:
       return JSONResponse(
         status_code=status.HTTP_400_BAD_REQUEST,
         content={"message": "Weekly cancellation limit reached."}
@@ -454,16 +449,13 @@ async def cancel_order(order_id: str, id_token: str):
         content={"message": f"Cannot cancel order with status: {current_status}"}
       )
 
-    # --- NEW REFUND LOGIC ---
     total_amount = order_data.get("total_amount", 0)
     refund_amount = 0
     refund_type = "NO_REFUND"
-    
-    # If Status is READY -> 70% Refund
+
     if current_status == "READY":
         refund_amount = int(total_amount * 0.70)
         refund_type = "PARTIAL_REFUND"
-    # If Status is PAID/RESERVED (Not cooked yet) -> 100% Refund (Usually)
     elif current_status in ["PAID", "RESERVED"]:
         refund_amount = total_amount
         refund_type = "FULL_REFUND"
@@ -478,7 +470,7 @@ async def cancel_order(order_id: str, id_token: str):
         refund_response = razorpay_client.payment.refund(
           payment_id,
           {
-            "amount": int(refund_amount * 100), # Razorpay expects paise
+            "amount": int(refund_amount * 100),
             "speed": "normal",
             "notes": {
               "order_id": order_id,
@@ -493,14 +485,12 @@ async def cancel_order(order_id: str, id_token: str):
         print("[Refund Error]", e)
         refund_status = "FAILED"
 
-    # --- RESALE ITEM LOGIC ---
     resale_created = False
     
     if current_status == "READY":
       college_id = order_data.get("college_id")
       stall_id = order_data.get("stall_id")
-      
-      # Item Price = 70% of original (Since stall kept 30%)
+
       discounted_price = int(total_amount * 0.70)
 
       resale_item = {
@@ -512,7 +502,7 @@ async def cancel_order(order_id: str, id_token: str):
         "items": order_data.get("items", []),
         "original_price": total_amount,
         "discounted_price": discounted_price,
-        "max_price": discounted_price, # ✅ Store Max Price constraint
+        "max_price": discounted_price,
         "status": "AVAILABLE",
         "created_at": firestore.SERVER_TIMESTAMP
       }
@@ -522,9 +512,6 @@ async def cancel_order(order_id: str, id_token: str):
 
     batch = db.batch()
 
-    # Calculate Staff Payout (The amount stall keeps immediately)
-    # If READY: Stall keeps 30% (Total - Refund)
-    # If PAID: Stall keeps 0
     retained_amount = total_amount - refund_amount
 
     batch.update(order_ref, {

@@ -1,4 +1,4 @@
-# app/schema.py
+# app/schemas.py
 
 from pydantic import BaseModel, Field, EmailStr
 from typing import List, Optional
@@ -15,7 +15,6 @@ class StaffAuthResponse(BaseModel):
 class UpdateStaffEmailSchema(BaseModel):
     new_email: str
 
-# --- FIX START ---
 class UpdateUserProfileSchema(BaseModel):
     name: Optional[str] = Field(None, min_length=2)
     roll_number: Optional[str] = Field(None, min_length=1)
@@ -24,7 +23,6 @@ class UpdateUserProfileSchema(BaseModel):
 class UpdateStaffProfileSchema(BaseModel):
     name: Optional[str] = Field(None, min_length=2)
     phone: Optional[str] = None
-# --- FIX END ---
 
 class MenuItemSchema(BaseModel):
     name: str
